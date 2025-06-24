@@ -1,7 +1,7 @@
 [package]
 name = "keylightd"
 version = "1.1.0"
-edition = "2021"
+edition = "2024"
 license = "0BSD"
 readme = "README.md"
 description = "Keyboard backlight daemon for Framework laptops"
