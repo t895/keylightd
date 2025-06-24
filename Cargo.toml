@@ -9,12 +9,12 @@ repository = "https://github.com/jonas-schievink/keylightd"
 categories = ["hardware-support", "command-line-utilities"]
 
 [dependencies]
-evdev = "0.12.1"
-nix = { version = "0.26.2", features = ["user"] }
+evdev = "0.13.1"
+nix = { version = "0.30.1", features = ["user", "ioctl"] }
 anyhow = "1.0.70"
 bytemuck = { version = "1.13.1", features = ["derive"] }
 log = "0.4.17"
-env_logger = { version = "0.10.0", default-features = false, features = [
+env_logger = { version = "0.11.8", default-features = false, features = [
     "auto-color",
     "humantime",
 ] }
