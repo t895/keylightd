@@ -11,14 +11,15 @@ categories = ["hardware-support", "command-line-utilities"]
 [dependencies]
 evdev = "0.13.1"
 nix = { version = "0.30.1", features = ["user", "ioctl"] }
-anyhow = "1.0.70"
-bytemuck = { version = "1.13.1", features = ["derive"] }
+anyhow = "1.0.98"
+bytemuck = { version = "1.23.1", features = ["derive"] }
 log = "0.4.17"
 env_logger = { version = "0.11.8", default-features = false, features = [
     "auto-color",
     "humantime",
 ] }
-argh = "0.1.10"
+argh = "0.1.13"
+mio = { version = "1.0.4", features = ["os-poll", "os-ext"] }
 
 [profile.release]
 lto = "fat"

@@ -4,8 +4,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
+use std::os::fd::AsRawFd;
 use argh::FromArgs;
+use mio::{Events, Interest, Poll, Token};
+use mio::unix::SourceFd;
 use command::{GetKeyboardBacklight, SetKeyboardBacklight};
 use ec::EmbeddedController;
 
@@ -105,7 +107,19 @@ fn main() -> anyhow::Result<()> {
                     let name = device.name();
                     let name = name.as_deref().unwrap_or("<unknown>").to_string();
                     log::info!("starting listener on {}: {name}", path.display());
+
+                    let mut poller = Poll::new().unwrap();
+                    let token = Token(0);
+                    poller.registry().register(
+                        &mut SourceFd(&device.as_raw_fd()),
+                        token,
+                        Interest::READABLE,
+                    ).unwrap();
+                    let mut events = Events::with_capacity(1);
+
                     loop {
+                        poller.poll(&mut events, None).unwrap();
+
                         if let Err(e) = device.fetch_events() {
                             log::warn!(
                                 "error while fetching events for device '{name}': {e}; closing"
@@ -115,7 +129,7 @@ fn main() -> anyhow::Result<()> {
                         *act.last_activity.lock().unwrap() = Instant::now();
                         act.condvar.notify_one();
 
-                        // Delay a bit, to avoid busy looping.
+                        // Limit the rate of updates.
                         thread::sleep(Duration::from_millis(500));
                     }
                 });
