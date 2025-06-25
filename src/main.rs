@@ -1,15 +1,11 @@
-use std::{
-    io,
-    sync::{Arc, Condvar, Mutex},
-    thread,
-    time::{Duration, Instant},
-};
-use std::os::fd::AsRawFd;
 use argh::FromArgs;
-use mio::{Events, Interest, Poll, Token};
-use mio::unix::SourceFd;
 use command::{GetKeyboardBacklight, SetKeyboardBacklight};
 use ec::EmbeddedController;
+use evdev::Device;
+use mio::unix::SourceFd;
+use mio::{Events, Interest, Poll, Token};
+use std::os::fd::AsRawFd;
+use std::{io, thread, time::Duration};
 
 use crate::command::{LedBrightnesses, LedControl, LedFlags, LedId};
 
@@ -40,6 +36,42 @@ fn parse_brightness(s: &str) -> Result<u8, String> {
     Ok(brightness)
 }
 
+fn fade_to(ec: &EmbeddedController, power: bool, target: u8) -> io::Result<()> {
+    let resp = ec.command(GetKeyboardBacklight)?;
+    let mut cur = if resp.enabled != 0 { resp.percent } else { 0 };
+    while cur != target {
+        if cur > target {
+            cur -= 1;
+        } else {
+            cur += 1;
+        }
+
+        if power {
+            // The power LED cannot be faded from software (although the beta BIOS apparently
+            // has a switch for dimming it, so maybe it'll work with the next BIOS update).
+            // So instead, we treat 0 as off and set it back to auto for any non-zero value.
+            if cur == 0 {
+                ec.command(LedControl {
+                    led_id: LedId::POWER,
+                    flags: LedFlags::NONE,
+                    brightness: LedBrightnesses::default(),
+                })?;
+            } else if cur == 1 {
+                ec.command(LedControl {
+                    led_id: LedId::POWER,
+                    flags: LedFlags::AUTO,
+                    brightness: LedBrightnesses::default(),
+                })?;
+            }
+        }
+
+        ec.command(SetKeyboardBacklight { percent: cur })?;
+
+        thread::sleep(Duration::from_millis(3));
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     env_logger::builder()
         .filter_module(
@@ -55,84 +87,18 @@ fn main() -> anyhow::Result<()> {
     let args: Args = argh::from_env();
     log::debug!("args={:?}", args);
 
-    let ec = EmbeddedController::open()?;
-    let fade_to = |target: u8| -> io::Result<()> {
-        let resp = ec.command(GetKeyboardBacklight)?;
-        let mut cur = if resp.enabled != 0 { resp.percent } else { 0 };
-        while cur != target {
-            if cur > target {
-                cur -= 1;
-            } else {
-                cur += 1;
-            }
-
-            if args.power {
-                // The power LED cannot be faded from software (although the beta BIOS apparently
-                // has a switch for dimming it, so maybe it'll work with the next BIOS update).
-                // So instead, we treat 0 as off and set it back to auto for any non-zero value.
-                if cur == 0 {
-                    ec.command(LedControl {
-                        led_id: LedId::POWER,
-                        flags: LedFlags::NONE,
-                        brightness: LedBrightnesses::default(),
-                    })?;
-                } else if cur == 1 {
-                    ec.command(LedControl {
-                        led_id: LedId::POWER,
-                        flags: LedFlags::AUTO,
-                        brightness: LedBrightnesses::default(),
-                    })?;
-                }
-            }
-
-            ec.command(SetKeyboardBacklight { percent: cur })?;
-
-            thread::sleep(Duration::from_millis(3));
-        }
-        Ok(())
-    };
-
-    let act = Arc::new(ActivityState {
-        last_activity: Mutex::new(Instant::now()),
-        condvar: Condvar::new(),
-    });
-
-    for (path, mut device) in evdev::enumerate() {
+    let mut devices = Vec::<Device>::new();
+    for (_, device) in evdev::enumerate() {
         // Filter devices so that only the Framework's builtin touchpad and keyboard are listened
         // to. Since we don't support hotplug, listening on USB devices wouldn't work reliably.
         match device.name() {
             Some("PIXA3854:00 093A:0274 Touchpad" | "AT Translated Set 2 keyboard") => {
-                let act = act.clone();
-                thread::spawn(move || -> io::Result<()> {
-                    let name = device.name();
-                    let name = name.as_deref().unwrap_or("<unknown>").to_string();
-                    log::info!("starting listener on {}: {name}", path.display());
-
-                    let mut poller = Poll::new().unwrap();
-                    let token = Token(0);
-                    poller.registry().register(
-                        &mut SourceFd(&device.as_raw_fd()),
-                        token,
-                        Interest::READABLE,
-                    ).unwrap();
-                    let mut events = Events::with_capacity(1);
-
-                    loop {
-                        poller.poll(&mut events, None).unwrap();
-
-                        if let Err(e) = device.fetch_events() {
-                            log::warn!(
-                                "error while fetching events for device '{name}': {e}; closing"
-                            );
-                            return Err(e);
-                        }
-                        *act.last_activity.lock().unwrap() = Instant::now();
-                        act.condvar.notify_one();
-
-                        // Limit the rate of updates.
-                        thread::sleep(Duration::from_millis(500));
-                    }
-                });
+                log::info!(
+                    "Got device - {} - {:?}",
+                    device.name().unwrap(),
+                    device.input_id()
+                );
+                devices.push(device);
             }
             _ => {}
         }
@@ -141,32 +107,36 @@ fn main() -> anyhow::Result<()> {
     log::info!("idle timeout: {} seconds", args.timeout);
     log::info!("brightness level: {}%", args.brightness);
 
-    let mut state = None;
+    let mut poller = Poll::new()?;
+    for device in &devices {
+        poller.registry().register(
+            &mut SourceFd(&device.as_raw_fd()),
+            Token(device.input_id().product() as usize),
+            Interest::READABLE,
+        )?;
+    }
+    let mut events = Events::with_capacity(1);
+
+    let mut active = false;
+    let timeout = Duration::from_secs(args.timeout.into());
+
+    let ec = EmbeddedController::open()?;
     loop {
-        let guard = act.last_activity.lock().unwrap();
-        let last = *guard;
-        let (_unused, result) = act
-            .condvar
-            .wait_timeout_while(guard, Duration::from_secs(args.timeout.into()), |instant| {
-                *instant == last
-            })
-            .unwrap();
-        let new_state = !result.timed_out();
-        if state != Some(new_state) {
-            log::info!("activity state changed: {state:?} -> {new_state}");
-            if new_state {
-                // Fade in
-                fade_to(args.brightness)?;
-            } else {
-                // Fade out
-                fade_to(0)?;
+        poller.poll(&mut events, Some(timeout))?;
+
+        if events.is_empty() {
+            if active {
+                fade_to(&ec, args.power, 0)?;
+                active = false;
             }
-            state = Some(new_state);
+        } else {
+            if !active {
+                fade_to(&ec, args.power, args.brightness)?;
+                active = true;
+            }
+
+            // Limit the rate of fade-in updates.
+            thread::sleep(Duration::from_millis(500));
         }
     }
-}
-
-struct ActivityState {
-    last_activity: Mutex<Instant>,
-    condvar: Condvar,
 }
