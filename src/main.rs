@@ -26,6 +26,10 @@ struct Args {
     /// also control the power LED in the fingerprint module
     #[argh(switch)]
     power: bool,
+
+    /// restores the last brightness set when becoming active again
+    #[argh(switch)]
+    persist_brightness: bool,
 }
 
 fn parse_brightness(s: &str) -> Result<u8, String> {
@@ -119,10 +123,16 @@ fn main() -> anyhow::Result<()> {
 
     let mut active = false;
     let timeout = Duration::from_secs(args.timeout.into());
+    let mut max_brightness = args.brightness;
 
     let ec = EmbeddedController::open()?;
     loop {
         poller.poll(&mut events, Some(timeout))?;
+
+        if active && args.persist_brightness {
+            let resp = ec.command(GetKeyboardBacklight)?;
+            max_brightness = resp.percent;
+        }
 
         if events.is_empty() {
             if active {
@@ -131,7 +141,7 @@ fn main() -> anyhow::Result<()> {
             }
         } else {
             if !active {
-                fade_to(&ec, args.power, args.brightness)?;
+                fade_to(&ec, args.power, max_brightness)?;
                 active = true;
             }
 
