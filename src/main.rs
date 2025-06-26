@@ -133,7 +133,10 @@ fn main() -> anyhow::Result<()> {
     let ec = EmbeddedController::open()?;
     let mut events = Events::with_capacity(1);
     loop {
-        poller.poll(&mut events, Some(timeout))?;
+        poller.poll(
+            &mut events,
+            if active { Some(timeout) } else { None }
+        )?;
 
         if active && args.persist_brightness {
             let resp = ec.command(GetKeyboardBacklight)?;
