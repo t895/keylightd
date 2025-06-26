@@ -91,6 +91,7 @@ fn main() -> anyhow::Result<()> {
     let args: Args = argh::from_env();
     log::debug!("args={:?}", args);
 
+    let mut poller = Poll::new()?;
     let mut devices = Vec::<Device>::new();
     for (_, device) in evdev::enumerate() {
         // Filter devices so that only the Framework's builtin touchpad and keyboard are listened
@@ -102,6 +103,12 @@ fn main() -> anyhow::Result<()> {
                     device.name().unwrap(),
                     device.input_id()
                 );
+
+                poller.registry().register(
+                    &mut SourceFd(&device.as_raw_fd()),
+                    Token(device.input_id().product() as usize),
+                    Interest::READABLE,
+                )?;
                 devices.push(device);
             }
             _ => {}
@@ -111,21 +118,12 @@ fn main() -> anyhow::Result<()> {
     log::info!("idle timeout: {} seconds", args.timeout);
     log::info!("brightness level: {}%", args.brightness);
 
-    let mut poller = Poll::new()?;
-    for device in &devices {
-        poller.registry().register(
-            &mut SourceFd(&device.as_raw_fd()),
-            Token(device.input_id().product() as usize),
-            Interest::READABLE,
-        )?;
-    }
-    let mut events = Events::with_capacity(1);
-
     let mut active = false;
     let timeout = Duration::from_secs(args.timeout.into());
     let mut max_brightness = args.brightness;
 
     let ec = EmbeddedController::open()?;
+    let mut events = Events::with_capacity(1);
     loop {
         poller.poll(&mut events, Some(timeout))?;
 
