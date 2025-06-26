@@ -12,29 +12,13 @@ mod ec;
 /// keylightd - automatic keyboard backlight daemon for Framework laptops
 #[derive(Debug, FromArgs)]
 struct Args {
-    /// brightness level when active (0-100) [default=30]
-    #[argh(option, default = "30", from_str_fn(parse_brightness))]
-    brightness: u8,
-
-    /// activity timeout in seconds [default=10]
-    #[argh(option, default = "10")]
+    /// activity timeout in seconds [default=20]
+    #[argh(option, default = "20")]
     timeout: u32,
 
     /// also control the power LED in the fingerprint module
     #[argh(switch)]
     power: bool,
-
-    /// restores the last brightness set when becoming active again
-    #[argh(switch)]
-    persist_brightness: bool,
-}
-
-fn parse_brightness(s: &str) -> Result<u8, String> {
-    let brightness = s.parse::<u8>().map_err(|e| e.to_string())?;
-    if brightness > 100 {
-        return Err("invalid brightness value {brightness} (valid range: 0-100)".into());
-    }
-    Ok(brightness)
 }
 
 fn fade_to(ec: &EmbeddedController, power: bool, target: u8) -> io::Result<()> {
@@ -124,13 +108,13 @@ fn main() -> anyhow::Result<()> {
     register_devices(&poller, &mut devices)?;
 
     log::info!("idle timeout: {} seconds", args.timeout);
-    log::info!("brightness level: {}%", args.brightness);
 
-    let mut active = false;
     let timeout = Duration::from_secs(args.timeout.into());
-    let mut max_brightness = args.brightness;
 
     let ec = EmbeddedController::open()?;
+    let mut max_brightness = ec.command(GetKeyboardBacklight)?.percent;
+    let mut active = max_brightness > 0;
+
     let mut events = Events::with_capacity(1);
     loop {
         poller.poll(
@@ -138,9 +122,8 @@ fn main() -> anyhow::Result<()> {
             if active { Some(timeout) } else { None }
         )?;
 
-        if active && args.persist_brightness {
-            let resp = ec.command(GetKeyboardBacklight)?;
-            max_brightness = resp.percent;
+        if active {
+            max_brightness = ec.command(GetKeyboardBacklight)?.percent;
         }
 
         if events.is_empty() {
