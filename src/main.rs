@@ -1,7 +1,6 @@
 use argh::FromArgs;
 use command::{GetKeyboardBacklight, SetKeyboardBacklight};
 use ec::EmbeddedController;
-use evdev::Device;
 use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
 use std::os::fd::AsRawFd;
@@ -76,23 +75,8 @@ fn fade_to(ec: &EmbeddedController, power: bool, target: u8) -> io::Result<()> {
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
-    env_logger::builder()
-        .filter_module(
-            env!("CARGO_PKG_NAME"),
-            if cfg!(debug_assertions) {
-                log::LevelFilter::Debug
-            } else {
-                log::LevelFilter::Info
-            },
-        )
-        .init();
-
-    let args: Args = argh::from_env();
-    log::debug!("args={:?}", args);
-
-    let mut poller = Poll::new()?;
-    let mut devices = Vec::<Device>::new();
+#[cfg(unix)]
+fn register_devices(poller: &Poll, devices: &mut Vec<evdev::Device>) -> io::Result<()> {
     for (_, device) in evdev::enumerate() {
         // Filter devices so that only the Framework's builtin touchpad and keyboard are listened
         // to. Since we don't support hotplug, listening on USB devices wouldn't work reliably.
@@ -114,6 +98,32 @@ fn main() -> anyhow::Result<()> {
             _ => {}
         }
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn register_devices(poller: &Poll, devices: &mut Vec<u8>) -> io::Result<()> {
+    Ok(())
+}
+
+fn main() -> anyhow::Result<()> {
+    env_logger::builder()
+        .filter_module(
+            env!("CARGO_PKG_NAME"),
+            if cfg!(debug_assertions) {
+                log::LevelFilter::Debug
+            } else {
+                log::LevelFilter::Info
+            },
+        )
+        .init();
+
+    let args: Args = argh::from_env();
+    log::debug!("args={:?}", args);
+
+    let mut poller = Poll::new()?;
+    let mut devices = Vec::new();
+    register_devices(&poller, &mut devices)?;
 
     log::info!("idle timeout: {} seconds", args.timeout);
     log::info!("brightness level: {}%", args.brightness);

@@ -2,10 +2,7 @@ use std::{
     fs::File,
     io,
     mem::{size_of, size_of_val, MaybeUninit},
-    os::fd::AsRawFd,
 };
-
-use nix::{errno::Errno, libc::ioctl, request_code_readwrite};
 
 use crate::command::{self, Hello};
 
@@ -24,6 +21,7 @@ pub struct EmbeddedController {
 }
 
 impl EmbeddedController {
+    #[cfg(unix)]
     pub fn open() -> io::Result<Self> {
         let mut this = Self {
             fd: File::options()
@@ -38,7 +36,7 @@ impl EmbeddedController {
         this.version = match this.cmd_v1(Hello {
             in_data: 0xa0b0c0d0,
         }) {
-            Err(Errno::ENOTTY) => IoctlVersion::V2,
+            Err(nix::errno::Errno::ENOTTY) => IoctlVersion::V2,
             _ => IoctlVersion::V1,
         };
 
@@ -63,6 +61,11 @@ impl EmbeddedController {
         Ok(this)
     }
 
+    #[cfg(windows)]
+    pub fn open() -> io::Result<Self> {
+        panic!()
+    }
+
     pub fn command<C: command::Command>(&self, cmd: C) -> io::Result<C::Response> {
         match self.version {
             IoctlVersion::V1 => self.cmd_v1(cmd),
@@ -71,6 +74,7 @@ impl EmbeddedController {
         .map_err(Into::into)
     }
 
+    #[cfg(unix)]
     fn cmd_v1<C: command::Command>(&self, cmd: C) -> nix::Result<C::Response> {
         let mut resp = MaybeUninit::<C::Response>::uninit();
         let mut cmd = CommandV1 {
@@ -83,16 +87,17 @@ impl EmbeddedController {
             result: 0xff,
         };
         unsafe {
-            let ret = ioctl(
-                self.fd.as_raw_fd(),
-                request_code_readwrite!(':', 0, size_of::<CommandV1>()),
+            let ret = nix::libc::ioctl(
+                std::os::fd::AsRawFd::as_raw_fd(&self.fd),
+                nix::request_code_readwrite!(':', 0, size_of::<CommandV1>()),
                 &mut cmd,
             );
-            Errno::result(ret)?;
+            nix::errno::Errno::result(ret)?;
             Ok(resp.assume_init())
         }
     }
 
+    #[cfg(unix)]
     fn cmd_v2<C: command::Command>(&self, cmd: C) -> nix::Result<C::Response> {
         let mut cmd = CommandV2 {
             header: CommandV2Header {
@@ -106,12 +111,12 @@ impl EmbeddedController {
         };
 
         unsafe {
-            let ret = ioctl(
-                self.fd.as_raw_fd(),
-                request_code_readwrite!(0xEC, 0, size_of::<CommandV2Header>()),
+            let ret = nix::libc::ioctl(
+                std::os::fd::AsRawFd::as_raw_fd(&self.fd),
+                nix::request_code_readwrite!(0xEC, 0, size_of::<CommandV2Header>()),
                 &mut cmd,
             );
-            Errno::result(ret)?;
+            nix::errno::Errno::result(ret)?;
             Ok(cmd.data.resp)
         }
     }
