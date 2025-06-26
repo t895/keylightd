@@ -87,7 +87,7 @@ fn register_devices(poller: &Poll, devices: &mut Vec<evdev::Device>) -> io::Resu
                 );
 
                 poller.registry().register(
-                    &mut mio::unix::SourceFd(std::os::fd::AsRawFd::as_raw_fd(&device)),
+                    &mut mio::unix::SourceFd(&std::os::fd::AsRawFd::as_raw_fd(&device)),
                     Token(device.input_id().product() as usize),
                     Interest::READABLE,
                 )?;
