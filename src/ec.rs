@@ -66,12 +66,18 @@ impl EmbeddedController {
         panic!()
     }
 
+    #[cfg(unix)]
     pub fn command<C: command::Command>(&self, cmd: C) -> io::Result<C::Response> {
         match self.version {
             IoctlVersion::V1 => self.cmd_v1(cmd),
             IoctlVersion::V2 => self.cmd_v2(cmd),
         }
         .map_err(Into::into)
+    }
+
+    #[cfg(windows)]
+    pub fn command<C: command::Command>(&self, cmd: C) -> io::Result<C::Response> {
+        panic!()
     }
 
     #[cfg(unix)]

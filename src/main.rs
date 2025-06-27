@@ -1,9 +1,7 @@
 use argh::FromArgs;
 use command::{GetKeyboardBacklight, SetKeyboardBacklight};
 use ec::EmbeddedController;
-use mio::unix::SourceFd;
 use mio::{Events, Interest, Poll, Token};
-use std::os::fd::AsRawFd;
 use std::{io, thread, time::Duration};
 
 use crate::command::{LedBrightnesses, LedControl, LedFlags, LedId};
@@ -89,7 +87,7 @@ fn register_devices(poller: &Poll, devices: &mut Vec<evdev::Device>) -> io::Resu
                 );
 
                 poller.registry().register(
-                    &mut SourceFd(&device.as_raw_fd()),
+                    &mut mio::unix::SourceFd(std::os::fd::AsRawFd::as_raw_fd(&device)),
                     Token(device.input_id().product() as usize),
                     Interest::READABLE,
                 )?;
